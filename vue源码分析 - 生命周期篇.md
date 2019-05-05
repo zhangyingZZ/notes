@@ -6,7 +6,9 @@
 ![生命周期图](./img/2-1.jpeg)
 
 我们根据源码来对照这个图来看每一步是如何实现的
-开始，new Vue（）做了哪些事情？
+
+### 开始，new Vue（）做了哪些事情？
+
 我们来看一下源码，在src/core/instance/index.js 中
 
 ``` javascript
