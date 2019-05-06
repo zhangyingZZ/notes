@@ -284,7 +284,8 @@ Vue.prototype.$destroy = function () {
 
 ### 新增生命周期： activated、deactivated、errorCaptured
 > 其中activated、deactivated这两个钩子函数分别是在keep-alive 组件激活和停用之后回调的，它们不牵扯到整个Vue的生命周期之中
-组件一旦被 <keep-alive> 缓存，那么再次渲染的时候就不会执行 created、mounted 等钩子函数，但是我们很多业务场景都是希望在我们被缓存的组件再次被渲染的时候做一些事情，这个时候就需要这两个钩子函数了，他们的定义在src/core/vdom/create-component.js 中（deactivated相同）
+
+组件一旦被 `<keep-alive>` 缓存，那么再次渲染的时候就不会执行 created、mounted 等钩子函数，但是我们很多业务场景都是希望在我们被缓存的组件再次被渲染的时候做一些事情，这个时候就需要这两个钩子函数了，他们的定义在src/core/vdom/create-component.js 中（deactivated相同）
 ```javascript
 const componentVNodeHooks = {
   insert (vnode: MountedComponentVNode) {
