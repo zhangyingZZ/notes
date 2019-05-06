@@ -63,6 +63,7 @@ Vue 初始化主要就干了几件事情，合并配置，初始化生命周期�
 > ·  原文[https://blog.csdn.net/u011068996/article/details/80970284]
 
 接下来我们通过源码来看一下生命周期是怎么执行的，执行函数怎么实现的？
+
 首先我们在/src/core/instance/init.js中，看下`_init`的方法实现。
 ```javascript
 Vue.prototype._init = function (options?: Object) {
@@ -91,6 +92,8 @@ Vue.prototype._init = function (options?: Object) {
 
 在`cteated`之后, 执行 `vm.$mount(vm.$options.el)` 进行 DOM挂载。这里先引入下，后边将详细介绍。
 
+如果组件在加载的时候需要和后端有交互，放在这俩个钩子函数执行都可以，如果是需要访问 props、data 等数据的话，就需要使用 created 钩子函数。
+
 ### 生命周期的执行方式
 我们能够发现，源码中最终执行生命周期的函数都是调用 callHook 方法，它的定义在 src/core/instance/lifecycle 中：
 
@@ -102,40 +105,276 @@ export function callHook (vm: Component, hook: string) {
   const info = `${hook} hook`
   if (handlers) {
     for (let i = 0, j = handlers.length; i < j; i++) {
-      invokeWithErrorHandling(handlers[i], vm, null, vm, info)    // 执行生命周期函数
+      invokeWithErrorHandling(handlers[i], vm, null, vm, info)    // 执行生命周期函数，更好的异步错误处理
     }
   }
   if (vm._hasHookEvent) {
-    vm.$emit('hook:' + hook)
+    vm.$emit('hook:' + hook)  // 判断是否存在生命周期钩子的事件侦听器
   }
   popTarget()
 }
 }
 ```
-比如：触发mounted 钩子方式： 
+异常处理的逻辑放在 /src/core/util/error.js 中
+```javascript
+export function invokeWithErrorHandling (
+  handler: Function,
+  context: any,
+  args: null | any[],
+  vm: any,
+  info: string
+) {
+  let res
+  try {
+    res = args ? handler.apply(context, args) : handler.call(context)  // 根据参数选择不同的handle执行方式
+    if (res && !res._isVue && isPromise(res) && !res._handled) {
+      res.catch(e => handleError(e, vm, info + ` (Promise/async)`))
+      // 避免嵌套调用时catch多次的触发
+      res._handled = true
+    }
+  } catch (e) {
+    handleError(e, vm, info)
+  }
+  return res
+}
 ```
-callHook(vm, 'mounted')
+created 钩子方式： 
 ```
-解释：传入hook，获取vm.$options[hook]对应的回调函数数组，遍历执行。
-各个阶段的生命周期函数会被合并到vm.options中，通过callback回调
+callHook(vm, 'created')
+```
+**解释**：
+· 以 pushTarget() 开头，并以 popTarget() 结尾,是为了避免在某些生命周期钩子中使用 props 数据导致收集冗余的依赖。
+· 传入hook，获取vm.$options[hook]对应的回调函数数组，遍历执行。
+· 各个阶段的生命周期函数会被合并到vm.options中，通过callback回调
 
+**延展**：生命周期钩子的事件侦听器：
+```javascript
+<child
+  @hook:beforeCreate="handleChildBeforeCreate"
+  @hook:created="handleChildCreated"
+  @hook:mounted="handleChildMounted"
+  @hook:生命周期钩子
+ />
+```
+使用 hook: 加 生命周期钩子名称 的方式来监听组件相应的生命周期事件
 
 ### DOM挂载：Vue.prototype.$mount原型方法 (mountComponent)
 
 
 
 ### 页面正常交互: beforeUpdate和updated
-这两个钩子函数是在数据更新的时候进行回调的函数, Vue在/src/core/instance/lifecycle.js文件下有一个_update的原型声明：
 
+这两个钩子函数是在数据更新的时候进行回调的函数。
+`beforeUpdate` 的执行时机是在渲染 Watcher 的 before 函数中，代码在/src/core/instance/lifecycle.js下
+```javascript
+export function mountComponent (
+  vm: Component,
+  el: ?Element,
+  hydrating?: boolean
+): Component {
+  // ...
 
+  // we set this to vm._watcher inside the watcher's constructor
+  // since the watcher's initial patch may call $forceUpdate (e.g. inside child
+  // component's mounted hook), which relies on vm._watcher being already defined
+  new Watcher(vm, updateComponent, noop, {
+    before () {
+      if (vm._isMounted && !vm._isDestroyed) {
+        callHook(vm, 'beforeUpdate')
+      }
+    }
+  }, true /* isRenderWatcher */)
+  // ...
+}
+```
+这里可以看出在组件mount过程中，会实例化一个watcher去监听wm上的数据变化从而重新渲染，那么在实例化watcher中，是如何将当前watcher实例赋给wm，代码实现在 src/core/observer/watcher.js 中
+```javascript
+export default class Watcher {
+  // ...
+  constructor (
+    vm: Component,
+    expOrFn: string | Function,
+    cb: Function,
+    options?: ?Object,
+    isRenderWatcher?: boolean
+  ) {
+    this.vm = vm
+    if (isRenderWatcher) {
+      vm._watcher = this
+    }
+    vm._watchers.push(this)
+    // ...
+  }
+}
+```
+wathcer 实例 push 到 `vm._watchers` 中，`vm._watcher` 是专门用来监听 vm 上数据变化然后重新渲染的，
+
+需要在组件mounted之后调用这个钩子函数，接下来会在 glushSchedulerQueue中执行update，在src/core/observer/scheduler.js中
+```javascript
+function flushSchedulerQueue () {
+  // ...
+  // 获取到 updatedQueue
+  callUpdatedHooks(updatedQueue)
+}
+function callUpdatedHooks (queue) {
+  let i = queue.length
+  while (i--) {
+    const watcher = queue[i]
+    const vm = watcher.vm
+    // 判断满足当前 watcher 为 vm._watcher 以及组件已经 mounted 才执行updated钩子函数
+    if (vm._watcher === watcher && vm._isMounted && !vm._isDestroyed) {
+      callHook(vm, 'updated')
+    }
+  }
+}
+```
+也就是说在`callUpdatedHooks`函数中，只有`vm._watcher`回调后执行updated钩子函数。
 
 ### 销毁的时候回调：beforeDestroy 、destroyed
 
+完全销毁一个实例。清理它与其它实例的连接，解绑它的全部指令及事件监听器。最终会调用 $destroy 方法，它的定义在 src/core/instance/lifecycle.js 中：
+```javascript
+Vue.prototype.$destroy = function () {
+    const vm: Component = this
+    if (vm._isBeingDestroyed) {
+      return
+    }
+    callHook(vm, 'beforeDestroy')
+    vm._isBeingDestroyed = true
+    // remove self from parent
+    const parent = vm.$parent
+    if (parent && !parent._isBeingDestroyed && !vm.$options.abstract) {
+      remove(parent.$children, vm)
+    }
+    // teardown watchers
+    if (vm._watcher) {
+      vm._watcher.teardown()
+    }
+    let i = vm._watchers.length
+    while (i--) {
+      vm._watchers[i].teardown()
+    }
+    // remove reference from data ob
+    // frozen object may not have observer.
+    if (vm._data.__ob__) {
+      vm._data.__ob__.vmCount--
+    }
+    // call the last hook...
+    vm._isDestroyed = true
+    // invoke destroy hooks on current rendered tree
+    vm.__patch__(vm._vnode, null)
+    // fire destroyed hook
+    callHook(vm, 'destroyed')
+    // turn off all instance listeners.
+    vm.$off()
+    // remove __vue__ reference
+    if (vm.$el) {
+      vm.$el.__vue__ = null
+    }
+    // release circular reference (#6759)
+    if (vm.$vnode) {
+      vm.$vnode.parent = null
+    }
+  }
+```
+从 parent 的 $children 中删掉自身，删除 watcher，当前渲染的 VNode 执行销毁钩子函数等，执行完毕后再调用 destroy 钩子函数,
+`vm.__patch__(vm._vnode, null)` 触发它子组件的销毁钩子函数，这样一层层的递归调用，所以 destroy 钩子函数执行顺序是先子后父，和 mounted 过程一样。
+
+目前为止，整个Vue生命周期图示中的所有生命周期钩子都已经被执行完成了。那么剩下的activated、deactivated、errorCaptured这三个钩子函数是在何时被执行的呢？
 
 ### 新增生命周期： activated、deactivated、errorCaptured
+> 其中activated、deactivated这两个钩子函数分别是在keep-alive 组件激活和停用之后回调的，它们不牵扯到整个Vue的生命周期之中
+组件一旦被 <keep-alive> 缓存，那么再次渲染的时候就不会执行 created、mounted 等钩子函数，但是我们很多业务场景都是希望在我们被缓存的组件再次被渲染的时候做一些事情，这个时候就需要这两个钩子函数了，他们的定义在src/core/vdom/create-component.js 中（deactivated相同）
+```javascript
+const componentVNodeHooks = {
+  insert (vnode: MountedComponentVNode) {
+    const { context, componentInstance } = vnode
+    if (!componentInstance._isMounted) {
+      componentInstance._isMounted = true
+      callHook(componentInstance, 'mounted')
+    }
+    if (vnode.data.keepAlive) {
+      if (context._isMounted) {
+        queueActivatedComponent(componentInstance)
+      } else {
+        activateChildComponent(componentInstance, true /* direct */)
+      }
+    }
+  },
+  // ...
+}
+```
+我们先来看下非mount的情况，函数实现在src/core/instance/lifecycle.js中
+```javascript
+export function activateChildComponent (vm: Component, direct?: boolean) {
+  if (direct) {
+    vm._directInactive = false
+    if (isInInactiveTree(vm)) {
+      return
+    }
+  } else if (vm._directInactive) {
+    return
+  }
+  if (vm._inactive || vm._inactive === null) {
+    vm._inactive = false
+    for (let i = 0; i < vm.$children.length; i++) {
+      activateChildComponent(vm.$children[i])
+    }
+    callHook(vm, 'activated')
+  }
+}
+```
+可以看到这里就是执行组件的 acitvated 钩子函数，并且递归去执行它的所有子组件的 activated 钩子函数。
 
+**errorCaptured** 是唯一一个没有通过callHook方法来执行的钩子函数，直接通过遍历cur(vm).$options.errorCaptured，来执行config.errorHandler.call(null, err, vm, info)的钩子函数
+```javascript
+export function handleError (err: Error, vm: any, info: string) {
+  if (vm) {
+    let cur = vm
+    while ((cur = cur.$parent)) {
+      const hooks = cur.$options.errorCaptured
+      if (hooks) {
+        for (let i = 0; i < hooks.length; i++) {
+          try {
+            const capture = hooks[i].call(cur, err, vm, info) === false
+            if (capture) return
+          } catch (e) {
+            globalHandleError(e, cur, 'errorCaptured hook')
+          }
+        }
+      }
+    }
+  }
+  globalHandleError(err, vm, info)
+}
 
+function globalHandleError (err, vm, info) {
+  if (config.errorHandler) {
+    try {
+      return config.errorHandler.call(null, err, vm, info)
+    } catch (e) {
+      logError(e, null, 'config.errorHandler')
+    }
+  }
+  logError(err, vm, info)
+}
 
+function logError (err, vm, info) {
+  if (process.env.NODE_ENV !== 'production') {
+    warn(`Error in ${info}: "${err.toString()}"`, vm)
+  }
+  /* istanbul ignore else */
+  if ((inBrowser || inWeex) && typeof console !== 'undefined') {
+    console.error(err)
+  } else {
+    throw err
+  }
+}
+```
+**handleError** 方法中首先获取到报错的组件，之后递归查找当前组件的父组件，依次调用 `errorCaptured` 方法。在遍历调用完所有 errorCaptured 方法、或 errorCaptured 方法有报错时，会调用 globalHandleError 方法。
+
+**globalHandleError** 方法调用了全局的 errorHandler 方法。
+如果 errorHandler 方法自己报错了,生产环境下会使用 console.error 在控制台中输出。
 
 (待续)
 好了,就写到这了，希望看过后对你能有帮助。
