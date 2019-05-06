@@ -507,7 +507,6 @@ function logError (err, vm, info) {
 **globalHandleError** 方法调用了全局的 errorHandler 方法。
 如果 errorHandler 方法自己报错了,生产环境下会使用 console.error 在控制台中输出。
 
-(待续)
-好了,就写到这了，希望看过后对你能有帮助。
+至此,生命周期接近了尾声，希望看过后对你能有帮助，有疑问的地方，欢迎探讨指正。
 
 
