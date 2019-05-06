@@ -1,6 +1,6 @@
 # vue源码分析 - 生命周期篇
 
-在我们实际项目开发过程中，会非常频繁地和 Vue 组件的生命周期打交道，今天，从源码的角度来看一下这些生命周期的钩子函数执行时机与如何被执行的。
+在我们实际项目开发过程中，会非常频繁地和 Vue 组件的生命周期打交道，今天，从源码的角度来看一下这些生命周期的钩子函数执行时机。
 
 项目初始化执行 `var app = new Vue({})` 
 
@@ -28,9 +28,12 @@ export default Vue
 ```
 Vue 初始化主要就干了几件事情，合并配置，初始化生命周期，初始化事件中心，初始化渲染，初始化 data、props、computed、watcher 等等。
 
+
 ### 生命周期的定义：
 
-  > 每个 Vue 实例在被创建时都要经过一系列的初始化过程——例如，需要设置数据监听、编译模板、将实例挂载到 DOM 并在数据变化时更新 DOM 等。同时在这个过程中也会运行一些叫做生命周期钩子的函数，这给了用户在不同阶段添加自己的代码的机会。
+接下来回顾一下生命周期的定义，官网中介绍：
+
+  > 每个 Vue 实例在被创建时都要经过一系列的初始化过程——例如，需要设置数据监听、编译模板、将实例挂载到 DOM 并在数据变化时更新 DOM 等。同时在这个过程中也会运行一些叫做**生命周期钩子**的函数，这给了用户在不同阶段添加自己的代码的机会。
 
 首先，先看一张很熟悉的图：
 
@@ -63,6 +66,8 @@ Vue 初始化主要就干了几件事情，合并配置，初始化生命周期�
 > ·  原文[https://blog.csdn.net/u011068996/article/details/80970284]
 
 接下来我们通过源码来看一下生命周期是怎么执行的，执行函数怎么实现的？
+
+### 实例化阶段：beforeCreate & created
 
 首先我们在/src/core/instance/init.js中，看下`_init`的方法实现。
 ```javascript
@@ -115,7 +120,7 @@ export function callHook (vm: Component, hook: string) {
 }
 }
 ```
-异常处理的逻辑放在 /src/core/util/error.js 中
+异常处理的逻辑放在 /src/core/util/error.js 中，这里引入，后边展开介绍
 ```javascript
 export function invokeWithErrorHandling (
   handler: Function,
@@ -158,13 +163,138 @@ callHook(vm, 'created')
 ```
 使用 hook: 加 生命周期钩子名称 的方式来监听组件相应的生命周期事件
 
-### DOM挂载：Vue.prototype.$mount原型方法 (mountComponent)
+### DOM挂载：beforeMount & mounted
 
+Vue.prototype.$mount原型方法 (mountComponent)，这个方法定义在 /src/platforms/web/entry-runtime-with-compiler.js 
+```javascript
+const mount = Vue.prototype.$mount
+Vue.prototype.$mount = function (
+  el?: string | Element,
+  hydrating?: boolean
+): Component {
+  el = el && query(el)
+
+  /* istanbul ignore if */
+  // el不允许被挂载到body和html这样的根标签上面
+  if (el === document.body || el === document.documentElement) {
+    process.env.NODE_ENV !== 'production' && warn(
+      `Do not mount Vue to <html> or <body> - mount to normal elements instead.`
+    )
+    return this
+  }
+
+  const options = this.$options
+  // resolve template/el and convert to render function
+  // 判断是否有render函数
+  if (!options.render) {
+    let template = options.template
+    if (template) {
+      if (typeof template === 'string') {
+        if (template.charAt(0) === '#') {
+          template = idToTemplate(template)
+          /* istanbul ignore if */
+          if (process.env.NODE_ENV !== 'production' && !template) {
+            warn(
+              `Template element not found or is empty: ${options.template}`,
+              this
+            )
+          }
+        }
+      } else if (template.nodeType) {
+        template = template.innerHTML
+      } else {
+        if (process.env.NODE_ENV !== 'production') {
+          warn('invalid template option:' + template, this)
+        }
+        return this
+      }
+    } else if (el) {
+      template = getOuterHTML(el)  // 解析el作为template
+    }
+    // DOM渲染
+    if (template) {
+      /* istanbul ignore if */
+      if (process.env.NODE_ENV !== 'production' && config.performance && mark) {
+        mark('compile')
+      }
+
+      const { render, staticRenderFns } = compileToFunctions(template, {
+        outputSourceRange: process.env.NODE_ENV !== 'production',
+        shouldDecodeNewlines,
+        shouldDecodeNewlinesForHref,
+        delimiters: options.delimiters,
+        comments: options.comments
+      }, this)
+      options.render = render
+      options.staticRenderFns = staticRenderFns
+
+      /* istanbul ignore if */
+      if (process.env.NODE_ENV !== 'production' && config.performance && mark) {
+        mark('compile end')
+        measure(`vue ${this._name} compile`, 'compile', 'compile end')
+      }
+    }
+  }
+  return mount.call(this, el, hydrating)
+}
+
+/**
+ * Get outerHTML of elements, taking care
+ * of SVG elements in IE as well.
+ */
+function getOuterHTML (el: Element): string {
+  if (el.outerHTML) {
+    return el.outerHTML
+  } else {
+    const container = document.createElement('div')
+    container.appendChild(el.cloneNode(true))
+    return container.innerHTML
+  }
+}
+```
+这一部分代码的主要作用：就是进行template模板的解析,无论是使用单文件组件（.Vue）或是通过el、template属性，它最终都会通过render函数的形式来进行整个模板的解析
+
+而对$mount原型方法有一个可复用的设计，在 /src/platforms/web/runtime/index.js中
+```javascript
+Vue.prototype.$mount = function (
+  el?: string | Element,
+  hydrating?: boolean
+): Component {
+  el = el && inBrowser ? query(el) : undefined
+  return mountComponent(this, el, hydrating)
+}
+```
+调用了 `mountComponent`函数，此函数在 src/core/instance/lifecycle.js 中
+```javascript
+new Watcher(vm, updateComponent, noop, {
+    before () {
+      if (vm._isMounted) {
+        callHook(vm, 'beforeUpdate')
+      }
+    }
+  }, true /* isRenderWatcher */)
+  hydrating = false
+
+  // manually mounted instance, call mounted on self
+  // mounted is called for render-created child components in its inserted hook
+  if (vm.$vnode == null) {
+    vm._isMounted = true
+    callHook(vm, 'mounted')
+  }
+  return vm
+}
+
+```
+ 在执行`vm._render()`之前，调用了callHook(vm, 'beforeMount')，这个时候相关的 render 函数首次被调用 `const vnode = vm._render()` ，之后执行了callHook(vm, 'mounted')方法，标记着el 被新创建的 vm.$el 替换，并被挂载到实例上。
+
+**扩展**
+执行完 `vm._render` 生成 VNode 后，接下来就要执行 `vm._update` 去渲染 VNode,  接下来通过 vm.__patch__ 去把 VNode 转换成真正的 DOM 节点，这个过程中调用`insertedVnodeQueue`的添加顺序是先子后父，所以对于同步渲染的子组件而言，mounted 钩子函数的执行顺序也是先子后父。
 
 
 ### 页面正常交互: beforeUpdate和updated
 
-这两个钩子函数是在数据更新的时候进行回调的函数。
+这两个钩子函数是在数据更新的时候进行回调的。
+
 `beforeUpdate` 的执行时机是在渲染 Watcher 的 before 函数中，代码在/src/core/instance/lifecycle.js下
 ```javascript
 export function mountComponent (
@@ -262,7 +392,7 @@ Vue.prototype.$destroy = function () {
     // call the last hook...
     vm._isDestroyed = true
     // invoke destroy hooks on current rendered tree
-    vm.__patch__(vm._vnode, null)
+    vm.__patch__(vm._vnode, null)  // __patch__渲染 VNode
     // fire destroyed hook
     callHook(vm, 'destroyed')
     // turn off all instance listeners.
